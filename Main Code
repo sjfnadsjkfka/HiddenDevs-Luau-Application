@@ -1,0 +1,331 @@
+Elevator:
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local ButtonUsed = false
+
+local button = script.Parent
+local clickDetector = button.Part2:WaitForChild("ClickDetector")
+local door1 = workspace:WaitForChild("Door1")
+local door2 = workspace:WaitForChild("Door2")
+local Smoke = workspace.Smoke.Smoke
+local Smoke2 = workspace.Smoke2.Smoke
+local slideSound = game.ReplicatedStorage:WaitForChild("SlideSound")
+local shakeEvent = game.ReplicatedStorage:WaitForChild("ShakeEvent")
+local DoneSound = game.ReplicatedStorage:WaitForChild("Done")
+local KillBrick = game.Workspace:WaitForChild("Kill brick1")
+local RoomTrigger = workspace:WaitForChild("RoomTrigger1")
+
+-- Save original positions
+local KillBrickpos = KillBrick.Position
+local originalPos1 = door1.Position
+local originalPos2 = door2.Position
+
+Smoke.Enabled = false
+Smoke2.Enabled = false
+
+-- Tween settings
+local tweenInfo = TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- Function to check if players are inside the room
+local function PlayersInRoom()
+	local size = RoomTrigger.Size
+	local pos = RoomTrigger.Position
+	local region = Region3.new(pos - size / 2, pos + size / 2):ExpandToGrid(4)
+
+	local partsInRegion = workspace:FindPartsInRegion3(region, nil, math.huge)
+	local foundPlayers = {}
+
+	for _, part in ipairs(partsInRegion) do
+		local character = part:FindFirstAncestorOfClass("Model")
+		if character then
+			local player = Players:GetPlayerFromCharacter(character)
+			if player and not table.find(foundPlayers, player) then
+				table.insert(foundPlayers, player)
+			end
+		end
+	end
+
+	return foundPlayers
+end
+
+clickDetector.MouseClick:Connect(function(player)
+	if ButtonUsed then
+		print("Button has already been pressed")
+		return
+	end
+
+	ButtonUsed = true
+	slideSound:Play()
+
+	-- Create countdown GUI
+	local playerGui = player:WaitForChild("PlayerGui")
+	local countdownGui = Instance.new("ScreenGui")
+	countdownGui.Name = "CountdownGUI"
+	countdownGui.ResetOnSpawn = false
+	countdownGui.Parent = playerGui
+
+	local countdownLabel = Instance.new("TextLabel")
+	countdownLabel.Size = UDim2.new(0, 200, 0, 50)
+	countdownLabel.Position = UDim2.new(0.5, -100, 0.1, 0)
+	countdownLabel.Text = "Time left: 10"
+	countdownLabel.TextSize = 24
+	countdownLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	countdownLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	countdownLabel.Font = Enum.Font.GothamBold
+	countdownLabel.TextStrokeTransparency = 0.8
+	countdownLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	countdownLabel.BorderSizePixel = 0
+	countdownLabel.BackgroundTransparency = 0.5
+	countdownLabel.Parent = countdownGui
+
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.Parent = countdownLabel
+
+	-- Start the shake effect
+	shakeEvent:FireClient(player)
+
+	-- Start countdown
+	coroutine.wrap(function()
+		for i = 10, 1, -1 do
+			countdownLabel.Text = "Time left: " .. i
+			wait(1)
+		end
+	end)()
+
+	-- Open door 1
+	local open1 = TweenService:Create(door1, tweenInfo, {Position = originalPos1 + Vector3.new(0, 10, 0)})
+	open1:Play()
+	open1.Completed:Wait()
+
+	wait(8) -- wait until countdown is almost over
+	
+	countdownGui:Destroy()
+
+	-- Close door 1
+	local close1 = TweenService:Create(door1, tweenInfo, {Position = originalPos1})
+	close1:Play()
+	slideSound:Play()
+	close1.Completed:Wait()
+
+	-- Check if players are inside the room
+	local playersInRoom = PlayersInRoom()
+	if #playersInRoom == 0 then
+		print("No players in the room. Process stopped.")
+		ButtonUsed = false
+		countdownGui:Destroy()
+		return
+	end
+
+	wait(1)
+
+	-- Enable smoke effect
+	Smoke.Enabled = true
+	Smoke2.Enabled = true
+	wait(6)
+	Smoke.Enabled = false
+	Smoke2.Enabled = false
+	wait(2)
+
+	DoneSound:Play()
+	wait(1)
+
+	-- Open door 2
+	local open2 = TweenService:Create(door2, tweenInfo, {Position = originalPos2 + Vector3.new(0, 10, 0)})
+	open2:Play()
+	slideSound:Play()
+	open2.Completed:Wait()
+
+	wait(5)
+
+	-- Close door 2
+	local close2 = TweenService:Create(door2, tweenInfo, {Position = originalPos2})
+	close2:Play()
+	slideSound:Play()
+	close2.Completed:Wait()
+
+	-- KillBrick animation
+	local Kill = TweenService:Create(KillBrick, tweenInfo, {Position = KillBrickpos + Vector3.new(0, -15, 0)})
+	Kill:Play()
+	Kill.Completed:Wait()
+	local BackKill = TweenService:Create(KillBrick, tweenInfo, {Position = KillBrickpos})
+	BackKill:Play()
+	
+    ButtonUsed = false
+end)
+
+
+
+
+---------------------------------------------------------
+
+
+
+
+Disinfection:
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local ButtonUsed = false
+
+local button = script.Parent
+local clickDetector = button.Part2:WaitForChild("ClickDetector")
+local door1 = workspace:WaitForChild("Door3")
+local door2 = workspace:WaitForChild("Door4")
+local LiftPart = workspace:WaitForChild("LiftPart")
+local slideSound = game.ReplicatedStorage:WaitForChild("Elevator Door")
+local Music = game.ReplicatedStorage:WaitForChild("Life in an Elevator")
+local shakeEvent = game.ReplicatedStorage:WaitForChild("ShakeEvent")
+local DoneSound = game.ReplicatedStorage:WaitForChild("Done")
+local KillBrick = game.Workspace:WaitForChild("Kill brick2")
+local RoomTrigger = workspace:WaitForChild("RoomTrigger2")
+
+-- Save original positions
+local LiftBP = LiftPart.Position
+local KillBrickpos = KillBrick.Position
+local originalPos1 = door1.Position
+local originalPos2 = door2.Position
+
+-- Tween settings
+local tweenInfo1 = TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local tweenInfo2 = TweenInfo.new(20, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local tweenInfo3 = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- Function to check if players are inside the room
+local function PlayersInRoom()
+	local size = RoomTrigger.Size
+	local pos = RoomTrigger.Position
+	local region = Region3.new(pos - size / 2, pos + size / 2):ExpandToGrid(4)
+
+	local partsInRegion = workspace:FindPartsInRegion3(region, nil, math.huge)
+	local foundPlayers = {}
+
+	for _, part in ipairs(partsInRegion) do
+		local character = part:FindFirstAncestorOfClass("Model")
+		if character then
+			local player = Players:GetPlayerFromCharacter(character)
+			if player and not table.find(foundPlayers, player) then
+				table.insert(foundPlayers, player)
+			end
+		end
+	end
+
+	return foundPlayers
+end
+
+clickDetector.MouseClick:Connect(function(player)
+	if ButtonUsed then
+		print("Button has already been pressed")
+		return
+	end
+
+	ButtonUsed = true
+	slideSound:Play()
+
+	-- Create countdown GUI
+	local playerGui = player:WaitForChild("PlayerGui")
+	local countdownGui = Instance.new("ScreenGui")
+	countdownGui.Name = "CountdownGUI"
+	countdownGui.ResetOnSpawn = false
+	countdownGui.Parent = playerGui
+
+	local countdownLabel = Instance.new("TextLabel")
+	countdownLabel.Size = UDim2.new(0, 200, 0, 50)
+	countdownLabel.Position = UDim2.new(0.5, -100, 0.1, 0)
+	countdownLabel.Text = "Time left: 10"
+	countdownLabel.TextSize = 24
+	countdownLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	countdownLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	countdownLabel.Font = Enum.Font.GothamBold
+	countdownLabel.TextStrokeTransparency = 0.8
+	countdownLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	countdownLabel.BorderSizePixel = 0
+	countdownLabel.BackgroundTransparency = 0.5
+	countdownLabel.Parent = countdownGui
+
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.Parent = countdownLabel
+
+	-- Start countdown
+	coroutine.wrap(function()
+		for i = 10, 1, -1 do
+			countdownLabel.Text = "Time left: " .. i
+			wait(1)
+		end
+	end)()
+
+	-- Open door 1
+	local open1 = TweenService:Create(door1, tweenInfo1, {Position = originalPos1 + Vector3.new(0, 10, 0)})
+	open1:Play()
+	open1.Completed:Wait()
+
+	wait(5) -- wait until countdown almost ends
+	
+	countdownGui:Destroy()
+
+	-- Close door 1
+	local close1 = TweenService:Create(door1, tweenInfo1, {Position = originalPos1})
+	close1:Play()
+	slideSound:Play()
+	close1.Completed:Wait()
+
+	-- Check if players are inside the room
+	local playersInRoom = PlayersInRoom()
+	if #playersInRoom == 0 then
+		print("No players in the room. Process stopped.")
+		ButtonUsed = false
+		countdownGui:Destroy()
+		return
+	end
+	
+	wait(2)
+	
+	Music:Play()
+	
+	local MoveUp = TweenService:Create(LiftPart, tweenInfo2, {Position = LiftBP + Vector3.new(0, 142, 0)})
+	MoveUp:Play()
+	MoveUp.Completed:Wait()
+	
+	local fadeTime = 2 -- seconds
+	local steps = 20
+	local stepTime = fadeTime / steps
+
+	for i = steps, 0, -1 do
+		Music.Volume = i / steps
+		wait(stepTime)
+	end
+	Music:Stop()
+
+	wait(1)
+
+	-- Open door 2
+	local open2 = TweenService:Create(door2, tweenInfo1, {Position = originalPos2 + Vector3.new(0, 10, 0)})
+	open2:Play()
+	slideSound:Play()
+	open2.Completed:Wait()
+
+	wait(5)
+
+	-- Close door 2
+	local close2 = TweenService:Create(door2, tweenInfo1, {Position = originalPos2})
+	close2:Play()
+	slideSound:Play()
+	close2.Completed:Wait()
+
+	-- KillBrick animation
+	local Kill = TweenService:Create(KillBrick, tweenInfo1, {Position = KillBrickpos + Vector3.new(0, -15, 0)})
+	Kill:Play()
+	Kill.Completed:Wait()
+	local BackKill = TweenService:Create(KillBrick, tweenInfo1, {Position = KillBrickpos})
+	BackKill:Play()
+	BackKill.Completed:Wait()
+	
+	-- Move lift back down
+	local Liftdown = TweenService:Create(LiftPart, tweenInfo3, {Position = LiftBP})
+	Liftdown:Play()
+	Liftdown.Completed:Wait()
+	
+    ButtonUsed = false
+end)
