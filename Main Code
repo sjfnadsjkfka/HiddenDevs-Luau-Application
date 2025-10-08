@@ -1,331 +1,317 @@
-Elevator:
+--[[  
+    CONTROLS:  
+    - Left Mouse Button: Place Portal 1 (Blue)  
+    - Right Mouse Button: Place Portal 2 (Orange)  
 
-local TweenService = game:GetService("TweenService")
-local Players = game:GetService("Players")
+    FEATURES:  
+    - Raycast-based placement for precision.  
+    - Surface normal alignment for correct orientation.  
+    - ViewportFrame-based rendering to see through portals.  
+    - Smooth teleportation with momentum preservation.  
+    - Visual effects and tweens for a polished feel.  
+    - Cooldown system to prevent spam.  
+    - Highly configurable settings.  
+    - Optimized for performance.  
+]]  
 
-local ButtonUsed = false
+--// SERVICES //--  
+local UserInputService = game:GetService("UserInputService") -- Get the UserInputService for detecting input  
+local Players = game:GetService("Players") -- Get the Players service to access the local player  
+local RunService = game:GetService("RunService") -- Get RunService for render updates  
+local TweenService = game:GetService("TweenService") -- Get TweenService to animate portal opening  
+local Workspace = game:GetService("Workspace") -- Get Workspace to place portal parts  
+local ReplicatedStorage = game:GetService("ReplicatedStorage") -- Get ReplicatedStorage (not used here but commonly needed)  
 
-local button = script.Parent
-local clickDetector = button.Part2:WaitForChild("ClickDetector")
-local door1 = workspace:WaitForChild("Door1")
-local door2 = workspace:WaitForChild("Door2")
-local Smoke = workspace.Smoke.Smoke
-local Smoke2 = workspace.Smoke2.Smoke
-local slideSound = game.ReplicatedStorage:WaitForChild("SlideSound")
-local shakeEvent = game.ReplicatedStorage:WaitForChild("ShakeEvent")
-local DoneSound = game.ReplicatedStorage:WaitForChild("Done")
-local KillBrick = game.Workspace:WaitForChild("Kill brick1")
-local RoomTrigger = workspace:WaitForChild("RoomTrigger1")
+--// CONFIGURATION //--  
+local CONFIG = {  
+	MAX_PLACEMENT_DISTANCE = 200,      -- Maximum distance from player to place a portal  
+	PORTAL_COOLDOWN = 0.5,             -- Time between placing portals to prevent spamming  
+	TELEPORT_COOLDOWN = 1,             -- Time between player teleports  
+	PORTAL_SIZE = Vector3.new(6, 8, 0.2), -- Size of the portal frame  
+	PORTAL_COLOR_1 = Color3.fromRGB(0, 170, 255),  -- Color for portal 1 (blue)  
+	PORTAL_COLOR_2 = Color3.fromRGB(255, 170, 0),  -- Color for portal 2 (orange)  
+	PORTAL_OPEN_TIME = 0.3,            -- Animation duration for portal opening  
+}  
 
--- Save original positions
-local KillBrickpos = KillBrick.Position
-local originalPos1 = door1.Position
-local originalPos2 = door2.Position
+--// PLAYER AND MOUSE VARIABLES //--  
+local player = Players.LocalPlayer -- Reference to the local player  
+local character = player.Character or player.CharacterAdded:Wait() -- Get the player's character, wait if not loaded  
+local humanoid = character:WaitForChild("Humanoid") -- Get the Humanoid object for movement detection  
+local rootPart = character:WaitForChild("HumanoidRootPart") -- Get the HumanoidRootPart for position reference  
+local mouse = player:GetMouse() -- Get the player's mouse  
 
-Smoke.Enabled = false
-Smoke2.Enabled = false
+--// PORTAL STATE //--  
+local portal1 = nil -- Store data for portal 1  
+local portal2 = nil -- Store data for portal 2  
+local portal1Camera = nil -- Camera for portal 1 (see-through effect)  
+local portal2Camera = nil -- Camera for portal 2 (see-through effect)  
+local lastPlacementTime = 0 -- Timestamp of last portal placement  
+local lastTeleportTime = 0 -- Timestamp of last teleport  
+local connections = {} -- Store event connections for cleanup  
 
--- Tween settings
-local tweenInfo = TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+--// PRELOADS & TEMPLATES //--  
+local portalTemplate = Instance.new("Part") -- Base template for portal frame  
+portalTemplate.Name = "PortalFrame" -- Name the part  
+portalTemplate.Anchored = true -- Keep it stationary in the world  
+portalTemplate.CanCollide = false -- Disable collisions  
+portalTemplate.Material = Enum.Material.Neon -- Make it visually glowing  
+portalTemplate.TopSurface = Enum.SurfaceType.Smooth -- Smooth top surface  
+portalTemplate.BottomSurface = Enum.SurfaceType.Smooth -- Smooth bottom surface  
+portalTemplate.Size = CONFIG.PORTAL_SIZE -- Set size from configuration  
 
--- Function to check if players are inside the room
-local function PlayersInRoom()
-	local size = RoomTrigger.Size
-	local pos = RoomTrigger.Position
-	local region = Region3.new(pos - size / 2, pos + size / 2):ExpandToGrid(4)
+local portalVisualTemplate = Instance.new("Part") -- Visual part inside portal frame  
+portalVisualTemplate.Name = "PortalVisual" -- Name the visual part  
+portalVisualTemplate.Anchored = true -- Anchored in world  
+portalVisualTemplate.CanCollide = false -- Non-collidable  
+portalVisualTemplate.Transparency = 0.2 -- Slightly transparent  
+portalVisualTemplate.Material = Enum.Material.ForceField -- Visual material  
+portalVisualTemplate.Color = Color3.fromRGB(200, 200, 200) -- Light gray color  
+portalVisualTemplate.Size = Vector3.new(CONFIG.PORTAL_SIZE.X * 0.8, CONFIG.PORTAL_SIZE.Y * 0.8, 0.1) -- Slightly smaller than frame  
 
-	local partsInRegion = workspace:FindPartsInRegion3(region, nil, math.huge)
-	local foundPlayers = {}
+local portalTriggerTemplate = Instance.new("Part") -- Invisible trigger part for teleport detection  
+portalTriggerTemplate.Name = "PortalTrigger" -- Name the trigger  
+portalTriggerTemplate.Anchored = true -- Anchored in world  
+portalTriggerTemplate.CanCollide = false -- Non-collidable  
+portalTriggerTemplate.Transparency = 1 -- Completely invisible  
+portalTriggerTemplate.Size = portalVisualTemplate.Size + Vector3.new(0, 0, 2) -- Slightly larger to detect touches  
 
-	for _, part in ipairs(partsInRegion) do
-		local character = part:FindFirstAncestorOfClass("Model")
-		if character then
-			local player = Players:GetPlayerFromCharacter(character)
-			if player and not table.find(foundPlayers, player) then
-				table.insert(foundPlayers, player)
-			end
-		end
-	end
+--// FUNCTIONS //--  
 
-	return foundPlayers
-end
+-- Cleans up an existing portal and its associated objects  
+local function cleanupPortal(portalData)  
+	if not portalData then return end -- Exit if no portal exists  
+	if portalData.model and portalData.model:IsA("Model") and portalData.model.PrimaryPart then  
+		local tween = TweenService:Create(portalData.model.PrimaryPart, TweenInfo.new(CONFIG.PORTAL_OPEN_TIME), {Size = Vector3.new(0,0,0)}) -- Shrink animation  
+		tween:Play() -- Play shrinking animation  
+		tween.Completed:Wait() -- Wait until animation is done  
+		portalData.model:Destroy() -- Destroy portal model  
+	elseif portalData.model and portalData.model:IsA("Model") then  
+		portalData.model:Destroy() -- Destroy portal if no primary part  
+	end  
+	if portalData.camera then portalData.camera:Destroy() end -- Destroy portal camera if exists  
+	if portalData.connection then portalData.connection:Disconnect() end -- Disconnect trigger event  
+end  
 
-clickDetector.MouseClick:Connect(function(player)
-	if ButtonUsed then
-		print("Button has already been pressed")
-		return
-	end
+-- Creates the visual model for a portal  
+local function createPortalModel(portalColor)  
+	local model = Instance.new("Model") -- Create model container  
+	model.Name = "Portal" -- Name the model  
 
-	ButtonUsed = true
-	slideSound:Play()
+	local frame = portalTemplate:Clone() -- Clone portal frame  
+	frame.Color = portalColor -- Apply color  
+	frame.Parent = model -- Parent to model  
+	model.PrimaryPart = frame -- Set primary part  
 
-	-- Create countdown GUI
-	local playerGui = player:WaitForChild("PlayerGui")
-	local countdownGui = Instance.new("ScreenGui")
-	countdownGui.Name = "CountdownGUI"
-	countdownGui.ResetOnSpawn = false
-	countdownGui.Parent = playerGui
+	local visual = portalVisualTemplate:Clone() -- Clone visual part  
+	visual.Parent = frame -- Parent to frame  
+	local weld = Instance.new("WeldConstraint") -- Create weld to attach visual  
+	weld.Part0 = frame -- Connect frame  
+	weld.Part1 = visual -- Connect visual  
+	weld.Parent = frame -- Parent weld  
 
-	local countdownLabel = Instance.new("TextLabel")
-	countdownLabel.Size = UDim2.new(0, 200, 0, 50)
-	countdownLabel.Position = UDim2.new(0.5, -100, 0.1, 0)
-	countdownLabel.Text = "Time left: 10"
-	countdownLabel.TextSize = 24
-	countdownLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	countdownLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-	countdownLabel.Font = Enum.Font.GothamBold
-	countdownLabel.TextStrokeTransparency = 0.8
-	countdownLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-	countdownLabel.BorderSizePixel = 0
-	countdownLabel.BackgroundTransparency = 0.5
-	countdownLabel.Parent = countdownGui
+	local trigger = portalTriggerTemplate:Clone() -- Clone trigger part  
+	trigger.Parent = frame -- Parent to frame  
+	local triggerWeld = Instance.new("WeldConstraint") -- Weld trigger  
+	triggerWeld.Part0 = frame -- Frame side  
+	triggerWeld.Part1 = trigger -- Trigger side  
+	triggerWeld.Parent = frame -- Parent weld  
 
-	local uiCorner = Instance.new("UICorner")
-	uiCorner.Parent = countdownLabel
+	local surfaceGui = Instance.new("SurfaceGui") -- Create GUI for viewport  
+	surfaceGui.Face = Enum.NormalId.Front -- Attach to front face  
+	surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud -- Scale per stud  
+	surfaceGui.PixelsPerStud = 150 -- Pixels per stud  
+	surfaceGui.Parent = visual -- Parent to visual  
 
-	-- Start the shake effect
-	shakeEvent:FireClient(player)
+	local viewportFrame = Instance.new("ViewportFrame") -- Frame for seeing through portals  
+	viewportFrame.Size = UDim2.fromScale(1, 1) -- Fill surface  
+	viewportFrame.BackgroundColor3 = Color3.new(0,0,0) -- Black background  
+	viewportFrame.BorderColor3 = portalColor -- Border matches portal color  
+	viewportFrame.BorderSizePixel = 5 -- Border thickness  
+	viewportFrame.Parent = surfaceGui -- Parent to SurfaceGui  
 
-	-- Start countdown
-	coroutine.wrap(function()
-		for i = 10, 1, -1 do
-			countdownLabel.Text = "Time left: " .. i
-			wait(1)
-		end
-	end)()
+	return model, viewportFrame -- Return portal model and viewport  
+end  
 
-	-- Open door 1
-	local open1 = TweenService:Create(door1, tweenInfo, {Position = originalPos1 + Vector3.new(0, 10, 0)})
-	open1:Play()
-	open1.Completed:Wait()
+-- Updates the ViewportFrame cameras every frame for the "see-through" effect  
+local function updatePortalViews()  
+	if not (portal1 and portal2 and portal1.model and portal2.model and portal1.model.PrimaryPart and portal2.model.PrimaryPart) then return end -- Check portals exist  
 
-	wait(8) -- wait until countdown is almost over
-	
-	countdownGui:Destroy()
+	local p1CFrame = portal1.model.PrimaryPart.CFrame -- Portal 1 CFrame  
+	local p2CFrame = portal2.model.PrimaryPart.CFrame -- Portal 2 CFrame  
+	local playerHead = player.Character and player.Character:FindFirstChild("Head") -- Get player head  
+	if not playerHead then return end -- Exit if no head  
 
-	-- Close door 1
-	local close1 = TweenService:Create(door1, tweenInfo, {Position = originalPos1})
-	close1:Play()
-	slideSound:Play()
-	close1.Completed:Wait()
+	-- Update portal 2's view (seen from portal 1)  
+	if portal1.camera then  
+		local relativeCFrame = p1CFrame:ToObjectSpace(playerHead.CFrame) -- Relative to portal 1  
+		local transformedCFrame = p2CFrame * CFrame.Angles(0, math.pi, 0) * relativeCFrame -- Transform to portal 2  
+		portal1.camera.CFrame = transformedCFrame -- Apply to camera  
+	end  
 
-	-- Check if players are inside the room
-	local playersInRoom = PlayersInRoom()
-	if #playersInRoom == 0 then
-		print("No players in the room. Process stopped.")
-		ButtonUsed = false
-		countdownGui:Destroy()
-		return
-	end
+	-- Update portal 1's view (seen from portal 2)  
+	if portal2.camera then  
+		local relativeCFrame = p2CFrame:ToObjectSpace(playerHead.CFrame) -- Relative to portal 2  
+		local transformedCFrame = p1CFrame * CFrame.Angles(0, math.pi, 0) * relativeCFrame -- Transform to portal 1  
+		portal2.camera.CFrame = transformedCFrame -- Apply to camera  
+	end  
+end  
 
-	wait(1)
+-- Links the two portals together so they can render each other  
+local function linkPortals()  
+	if not (portal1 and portal2) then return end -- Exit if portals don't exist  
 
-	-- Enable smoke effect
-	Smoke.Enabled = true
-	Smoke2.Enabled = true
-	wait(6)
-	Smoke.Enabled = false
-	Smoke2.Enabled = false
-	wait(2)
+	if not portal1.camera then -- Create camera for portal 1 if missing  
+		portal1.camera = Instance.new("Camera") -- Create camera  
+		portal1.camera.Parent = portal1.viewport -- Parent to viewport  
+		portal1.viewport.CurrentCamera = portal1.camera -- Set current camera  
+	end  
 
-	DoneSound:Play()
-	wait(1)
+	if not portal2.camera then -- Create camera for portal 2 if missing  
+		portal2.camera = Instance.new("Camera") -- Create camera  
+		portal2.camera.Parent = portal2.viewport -- Parent to viewport  
+		portal2.viewport.CurrentCamera = portal2.camera -- Set current camera  
+	end  
 
-	-- Open door 2
-	local open2 = TweenService:Create(door2, tweenInfo, {Position = originalPos2 + Vector3.new(0, 10, 0)})
-	open2:Play()
-	slideSound:Play()
-	open2.Completed:Wait()
+	if connections.renderStep then connections.renderStep:Disconnect() end -- Disconnect previous render step  
+	connections.renderStep = RunService.RenderStepped:Connect(updatePortalViews) -- Update portals every frame  
+end  
 
-	wait(5)
+-- Handles the actual teleportation logic  
+local function onPortalTouched(touchedPart, sourcePortal, destinationPortal)  
+	if not (sourcePortal and destinationPortal and sourcePortal.model and destinationPortal.model) then return end -- Exit if portals missing  
+	if tick() - lastTeleportTime < CONFIG.TELEPORT_COOLDOWN then return end -- Respect teleport cooldown  
 
-	-- Close door 2
-	local close2 = TweenService:Create(door2, tweenInfo, {Position = originalPos2})
-	close2:Play()
-	slideSound:Play()
-	close2.Completed:Wait()
+	local partParent = touchedPart.Parent -- Get parent of touched part  
+	if not (partParent and partParent == character) then return end -- Only teleport the player  
 
-	-- KillBrick animation
-	local Kill = TweenService:Create(KillBrick, tweenInfo, {Position = KillBrickpos + Vector3.new(0, -15, 0)})
-	Kill:Play()
-	Kill.Completed:Wait()
-	local BackKill = TweenService:Create(KillBrick, tweenInfo, {Position = KillBrickpos})
-	BackKill:Play()
-	
-    ButtonUsed = false
-end)
+	lastTeleportTime = tick() -- Update teleport timestamp  
 
+	local root = partParent:FindFirstChild("HumanoidRootPart") -- Get root part  
+	if not root then return end -- Exit if missing  
 
+	local sourceCFrame = sourcePortal.model.PrimaryPart.CFrame -- Source portal CFrame  
+	local destCFrame = destinationPortal.model.PrimaryPart.CFrame -- Destination portal CFrame  
 
+	local offset = sourceCFrame:inverse() * root.CFrame -- Player's relative position to source portal  
+	local relativeVel = sourceCFrame:VectorToObjectSpace(root.AssemblyLinearVelocity) -- Player's relative velocity  
 
----------------------------------------------------------
+	local exitOffset = CFrame.Angles(0, math.pi, 0) * offset -- Rotate 180 degrees for exit  
+	local exitRelativeVel = CFrame.Angles(0, math.pi, 0):VectorToWorldSpace(relativeVel) -- Rotate velocity  
 
+	local exitCFrame_raw = destCFrame * exitOffset -- Raw exit CFrame  
 
+	local pos = exitCFrame_raw.Position -- Exit position  
+	local look = exitCFrame_raw.LookVector -- Exit look vector  
+	local up = Vector3.new(0, 1, 0) -- Default up vector  
 
+	if math.abs(look.Y) > 0.95 then -- If looking mostly up/down  
+		up = exitCFrame_raw.RightVector -- Adjust up vector to prevent roll  
+	end  
 
-Disinfection:
+	local exitCFrame_upright = CFrame.lookAt(pos, pos + look, up) -- Reconstruct upright CFrame  
 
-local TweenService = game:GetService("TweenService")
-local Players = game:GetService("Players")
+	root.CFrame = exitCFrame_upright + destCFrame.LookVector * 2 -- Move player slightly forward  
 
-local ButtonUsed = false
+	root.AssemblyLinearVelocity = destCFrame:VectorToWorldSpace(exitRelativeVel) -- Preserve velocity  
+end  
 
-local button = script.Parent
-local clickDetector = button.Part2:WaitForChild("ClickDetector")
-local door1 = workspace:WaitForChild("Door3")
-local door2 = workspace:WaitForChild("Door4")
-local LiftPart = workspace:WaitForChild("LiftPart")
-local slideSound = game.ReplicatedStorage:WaitForChild("Elevator Door")
-local Music = game.ReplicatedStorage:WaitForChild("Life in an Elevator")
-local shakeEvent = game.ReplicatedStorage:WaitForChild("ShakeEvent")
-local DoneSound = game.ReplicatedStorage:WaitForChild("Done")
-local KillBrick = game.Workspace:WaitForChild("Kill brick2")
-local RoomTrigger = workspace:WaitForChild("RoomTrigger2")
+-- Places a portal at the mouse's target position  
+local function placePortal(portalNumber)  
+	if tick() - lastPlacementTime < CONFIG.PORTAL_COOLDOWN then return end -- Respect placement cooldown  
 
--- Save original positions
-local LiftBP = LiftPart.Position
-local KillBrickpos = KillBrick.Position
-local originalPos1 = door1.Position
-local originalPos2 = door2.Position
+	local raycastParams = RaycastParams.new() -- Create raycast params  
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist -- Exclude certain objects  
+	local filterList = {character} -- Start blacklist with player  
+	if portal1 and portal1.model then table.insert(filterList, portal1.model) end -- Add portal1  
+	if portal2 and portal2.model then table.insert(filterList, portal2.model) end -- Add portal2  
+	raycastParams.FilterDescendantsInstances = filterList -- Apply filter  
 
--- Tween settings
-local tweenInfo1 = TweenInfo.new(5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local tweenInfo2 = TweenInfo.new(20, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local tweenInfo3 = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local rayOrigin = rootPart.Position -- Ray starts at player's root  
+	local rayDirection = (mouse.Hit.Position - rayOrigin).Unit -- Direction to mouse  
 
--- Function to check if players are inside the room
-local function PlayersInRoom()
-	local size = RoomTrigger.Size
-	local pos = RoomTrigger.Position
-	local region = Region3.new(pos - size / 2, pos + size / 2):ExpandToGrid(4)
+	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection * CONFIG.MAX_PLACEMENT_DISTANCE, raycastParams) -- Perform raycast  
 
-	local partsInRegion = workspace:FindPartsInRegion3(region, nil, math.huge)
-	local foundPlayers = {}
+	if raycastResult and raycastResult.Instance and raycastResult.Instance.CanCollide then -- If hit a valid surface  
+		lastPlacementTime = tick() -- Update placement timestamp  
 
-	for _, part in ipairs(partsInRegion) do
-		local character = part:FindFirstAncestorOfClass("Model")
-		if character then
-			local player = Players:GetPlayerFromCharacter(character)
-			if player and not table.find(foundPlayers, player) then
-				table.insert(foundPlayers, player)
-			end
-		end
-	end
+		local position = raycastResult.Position -- Hit position  
+		local normal = raycastResult.Normal -- Hit surface normal  
 
-	return foundPlayers
-end
+		local pos = position + normal * 0.1 -- Offset slightly from wall  
+		local lookAtPos = pos - normal -- Look at opposite direction  
+		local up = Vector3.new(0, 1, 0) -- Default up vector  
 
-clickDetector.MouseClick:Connect(function(player)
-	if ButtonUsed then
-		print("Button has already been pressed")
-		return
-	end
+		if math.abs(normal.Y) > 0.95 then -- Adjust up vector if floor/ceiling  
+			local playerLook = rootPart.CFrame.LookVector -- Get player horizontal look  
+			up = Vector3.new(playerLook.X, 0, playerLook.Z).Unit -- Horizontal up  
+		end  
 
-	ButtonUsed = true
-	slideSound:Play()
+		local portalCFrame = CFrame.lookAt(pos, lookAtPos, up) -- Final portal CFrame  
 
-	-- Create countdown GUI
-	local playerGui = player:WaitForChild("PlayerGui")
-	local countdownGui = Instance.new("ScreenGui")
-	countdownGui.Name = "CountdownGUI"
-	countdownGui.ResetOnSpawn = false
-	countdownGui.Parent = playerGui
+		if portalNumber == 1 then -- If placing portal 1  
+			cleanupPortal(portal1) -- Remove existing portal 1  
+			local model, viewport = createPortalModel(CONFIG.PORTAL_COLOR_1) -- Create portal 1  
+			model.Parent = Workspace -- Parent to workspace  
+			model:SetPrimaryPartCFrame(portalCFrame) -- Set position  
 
-	local countdownLabel = Instance.new("TextLabel")
-	countdownLabel.Size = UDim2.new(0, 200, 0, 50)
-	countdownLabel.Position = UDim2.new(0.5, -100, 0.1, 0)
-	countdownLabel.Text = "Time left: 10"
-	countdownLabel.TextSize = 24
-	countdownLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	countdownLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-	countdownLabel.Font = Enum.Font.GothamBold
-	countdownLabel.TextStrokeTransparency = 0.8
-	countdownLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-	countdownLabel.BorderSizePixel = 0
-	countdownLabel.BackgroundTransparency = 0.5
-	countdownLabel.Parent = countdownGui
+			portal1 = { -- Store portal 1 data  
+				model = model,  
+				viewport = viewport,  
+				camera = nil,  
+				connection = nil  
+			}  
+			portal1.connection = model.PrimaryPart.PortalTrigger.Touched:Connect(function(part) -- Connect teleport trigger  
+				onPortalTouched(part, portal1, portal2)  
+			end)  
 
-	local uiCorner = Instance.new("UICorner")
-	uiCorner.Parent = countdownLabel
+		elseif portalNumber == 2 then -- If placing portal 2  
+			cleanupPortal(portal2) -- Remove existing portal 2  
+			local model, viewport = createPortalModel(CONFIG.PORTAL_COLOR_2) -- Create portal 2  
+			model.Parent = Workspace -- Parent to workspace  
+			model:SetPrimaryPartCFrame(portalCFrame) -- Set position  
 
-	-- Start countdown
-	coroutine.wrap(function()
-		for i = 10, 1, -1 do
-			countdownLabel.Text = "Time left: " .. i
-			wait(1)
-		end
-	end)()
+			portal2 = { -- Store portal 2 data  
+				model = model,  
+				viewport = viewport,  
+				camera = nil,  
+				connection = nil  
+			}  
+			portal2.connection = model.PrimaryPart.PortalTrigger.Touched:Connect(function(part) -- Connect teleport trigger  
+				onPortalTouched(part, portal2, portal1)  
+			end)  
+		end  
 
-	-- Open door 1
-	local open1 = TweenService:Create(door1, tweenInfo1, {Position = originalPos1 + Vector3.new(0, 10, 0)})
-	open1:Play()
-	open1.Completed:Wait()
+		local frame = (portalNumber == 1 and portal1.model.PrimaryPart) or (portalNumber == 2 and portal2.model.PrimaryPart) -- Get portal frame  
+		frame.Size = Vector3.new() -- Shrink to zero for animation  
+		TweenService:Create(frame, TweenInfo.new(CONFIG.PORTAL_OPEN_TIME, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = CONFIG.PORTAL_SIZE}):Play() -- Animate opening  
 
-	wait(5) -- wait until countdown almost ends
-	
-	countdownGui:Destroy()
+		if portal1 and portal2 then -- If both portals exist  
+			linkPortals() -- Link for see-through effect  
+		end  
+	end  
+end  
 
-	-- Close door 1
-	local close1 = TweenService:Create(door1, tweenInfo1, {Position = originalPos1})
-	close1:Play()
-	slideSound:Play()
-	close1.Completed:Wait()
+-- Handle user input for placing portals  
+local function onInputBegan(input, gameProcessed)  
+	if gameProcessed then return end -- Ignore if GUI used input  
 
-	-- Check if players are inside the room
-	local playersInRoom = PlayersInRoom()
-	if #playersInRoom == 0 then
-		print("No players in the room. Process stopped.")
-		ButtonUsed = false
-		countdownGui:Destroy()
-		return
-	end
-	
-	wait(2)
-	
-	Music:Play()
-	
-	local MoveUp = TweenService:Create(LiftPart, tweenInfo2, {Position = LiftBP + Vector3.new(0, 142, 0)})
-	MoveUp:Play()
-	MoveUp.Completed:Wait()
-	
-	local fadeTime = 2 -- seconds
-	local steps = 20
-	local stepTime = fadeTime / steps
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then -- Left click  
+		placePortal(1) -- Place portal 1  
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then -- Right click  
+		placePortal(2) -- Place portal 2  
+	end  
+end  
 
-	for i = steps, 0, -1 do
-		Music.Volume = i / steps
-		wait(stepTime)
-	end
-	Music:Stop()
+--// INITIALIZATION //--  
+UserInputService.InputBegan:Connect(onInputBegan) -- Connect input listener  
 
-	wait(1)
-
-	-- Open door 2
-	local open2 = TweenService:Create(door2, tweenInfo1, {Position = originalPos2 + Vector3.new(0, 10, 0)})
-	open2:Play()
-	slideSound:Play()
-	open2.Completed:Wait()
-
-	wait(5)
-
-	-- Close door 2
-	local close2 = TweenService:Create(door2, tweenInfo1, {Position = originalPos2})
-	close2:Play()
-	slideSound:Play()
-	close2.Completed:Wait()
-
-	-- KillBrick animation
-	local Kill = TweenService:Create(KillBrick, tweenInfo1, {Position = KillBrickpos + Vector3.new(0, -15, 0)})
-	Kill:Play()
-	Kill.Completed:Wait()
-	local BackKill = TweenService:Create(KillBrick, tweenInfo1, {Position = KillBrickpos})
-	BackKill:Play()
-	BackKill.Completed:Wait()
-	
-	-- Move lift back down
-	local Liftdown = TweenService:Create(LiftPart, tweenInfo3, {Position = LiftBP})
-	Liftdown:Play()
-	Liftdown.Completed:Wait()
-	
-    ButtonUsed = false
-end)
+player.CharacterRemoving:Connect(function() -- Cleanup when player leaves  
+	cleanupPortal(portal1) -- Cleanup portal 1  
+	cleanupPortal(portal2) -- Cleanup portal 2  
+	portal1 = nil -- Clear reference  
+	portal2 = nil -- Clear reference  
+	for _, conn in pairs(connections) do -- Disconnect any remaining connections  
+		if conn then conn:Disconnect() end  
+	end  
+	connections = {} -- Clear connection table  
+end)  
